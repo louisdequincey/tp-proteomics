@@ -272,12 +272,27 @@ scale = len(_)*dx # scale accordingly
 ax.plot(x, norm.pdf(x, mu, sigma)*scale) # compute theoritical PDF and draw it
 ```
 
+```
+log2_c = 'Log2 Corrected Abundance Ratio'
+log2 = df[log2_c]
+mu_log2 = np.mean(log2)
+sigma_log2 = np.std(log2)**2
+
+fig, ax = plt.subplots()
+hist = ax.hist(log2, bins=50) # draw histogram
+dx = hist[1][1] - hist[1][0] # Get single value bar height
+scale = len(log2)*dx # scale accordingly
+ax.plot(log2, norm.pdf(log2, mu_log2, sigma_log2)*scale)
+plt.show()
+plt.savefig('Histogramme des valeurs des valeurs de Log2 Corrected Abundance Ratio')
+```
+
 ![Histogramme à inserez ici](histogram_log2FC.png "Title")
 
 ##### 5. Quelles remarques peut-on faire à l'observation de l'histogramme et de la loi théorique?
 
 ```
-
+Elle ne se superposent pas : la loi théorique est décalée sur la gauche par rapport à l'histogramme.
 
 ```
 
@@ -301,8 +316,7 @@ Nous allons implementer une approche ORA (Over Representation Analysis) naive.
 
 Quelles sont leurs identifiants UNIPROT ?
 ``` 
-
-
+['P23721', 'P77804', 'P0A6K6', 'P0A799', 'P0A7G6', 'P0A6F3', 'P25745', 'P0A6M8', 'P0A6L0', 'P0A8V6', 'P0A9Q1', 'P02358', 'P0ACF8', 'P62399', 'P0A905', 'P76506', 'P13036', 'P10384', 'P06971', 'P0A910', 'P06996', 'P76344', 'P02931']
 
 ```
 
@@ -361,6 +375,47 @@ Ce dictionnaire pourrait être de la forme suivante:
 ```
 Vous implémenterez la construction de ce dictionnaire et ainsi stockerez, pour la suite de l'analyse, les représentations des termes GO parmi les protéines surabondantes.
 
+```
+df_sampled = df.loc[(df['-LOG10 Adj.P-val'] > 3 )  & (df['Log2 Corrected Abundance Ratio'] > mu_log2 ) ]
+x = df_sampled['Accession']
+
+from xml.etree.ElementTree import parse, dump
+
+def getAccessionGOTerms(xmlFile, accession):
+    tree = parse(xmlFile)
+    root = tree.getroot()
+    ns = '{http://uniprot.org/uniprot}'
+    
+    match_go_terms = []
+    proteins = root.findall(ns + 'entry')
+    for entry in proteins:
+        accessions = entry.findall(ns+"accession")
+        current_accessions = [ acc.text for acc in accessions ]
+        if not accession in current_accessions:
+            continue
+        goTerms = entry.findall('{http://uniprot.org/uniprot}dbReference[@type="GO"]')
+        #goTerms = xmlEntry.findall(ns +'dbReference[@type="GO"]')
+        for goT in goTerms:
+            gID   = goT.attrib['id']
+            gName = goT.find(ns +'property[@type="term"]').attrib['value']
+            match_go_terms.append((gID, gName))
+        break
+    return match_go_terms
+
+go_terms = {}
+
+for prot in x:
+    res = getAccessionGOTerms("data/uniprot-proteome_UP000000625.xml", prot)
+    for tuples in res:
+        gID, gName = tuples
+        if gID in go_terms.keys():
+            go_terms[gID] = {'ID' : gID, 'name' : gName, 'carried_by' : carry.append(i)}
+        else:
+            carry = [prot]
+            go_terms[gID] = {'ID' : gID, 'name' : gName, 'carried_by' : carry}
+print(go_terms)
+```
+
 #### 3. Obtention des paramètres du modèle
 
 Nous évaluerons la significativité de la présence de tous les termes GO portés par les protéines surabondantes à l'aide d'un [modèle hypergéometrique](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.hypergeom.html).
@@ -371,15 +426,43 @@ Completer le tableau ci-dessous avec les quantités vous semblant adéquates pou
 
 | Symboles | Paramètres | Quantités Biologiques |
 | --- | --- | --- |
-| k | nombre de succès observés| |
-| K | nombre de succès possibles| |
-| n | nombre d'observations| |
-| N | nombre d'elements observables| |
+| k | nombre de succès observés| nombre de protéines surabondante portant le terme GO |
+| K | nombre de succès possibles| nombre de protéines portant le terme GO |
+| n | nombre d'observations| nombre de protéines surabondantes |
+| N | nombre d'elements observables| nombre de protéines |
 
 #### 4. Calcul de l'enrichissement en fonctions biologiques
 
 A l'aide du contenu de `data/EColiK12_GOcounts.json` parametrez la loi hypergeometrique et calculez la pvalue
 de chaque terme GO portés par les protéines surabondantes. Vous reporterez ces données dans le tableau ci-dessous
+
+```
+go_terms_coli = {}
+import json
+with open("data/EColiK12_GOcounts.json", "r") as f:
+    go_terms_coli = json.load(f)
+
+go_terms_coli = go_terms_coli['go_terms']
+print(go_terms_coli)
+```
+
+```
+from scipy.stats import hypergeom
+def p_val_go(dico_GO_list, dico_glob):
+    dico_pval = {}
+    n = len(df_sampled['Accession'])
+    N = len(df['Accession'])
+    for go in dico_GO_list:
+        dico = dico_GO_list[go]
+        k = len(dico['carried_by'])
+        K = dico_glob[go]['count']
+        rv = hypergeom.sf(k-1,N,n,K)
+        dico_pval[go] = rv
+    return dico_pval
+
+dico = p_val_go(go_terms, go_terms_coli)
+print(sorted(dico, key=lambda x:dico[x]))
+```
 
 | identifiant GO | définition | occurence | pvalue|
 |---|---|---|---|
